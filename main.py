@@ -45,7 +45,7 @@ parser.add_argument('--seed', type=int, default=1111,
                     help='random seed')
 parser.add_argument('--nonmono', type=int, default=5,
                     help='random seed')
-parser.add_argument('--cuda', action='store_false',
+parser.add_argument('--cuda', action='store_true',
                     help='use CUDA')
 parser.add_argument('--log-interval', type=int, default=200, metavar='N',
                     help='report interval')
@@ -64,6 +64,15 @@ parser.add_argument('--optimizer', type=str,  default='sgd',
                     help='optimizer to use (sgd, adam)')
 parser.add_argument('--when', nargs="+", type=int, default=[-1],
                     help='When (which epochs) to divide the learning rate by 10 - accepts multiple')
+parser.add_argument('--always-save', dest='always_save', action='store_true',
+                    help='save after every epoch')
+parser.add_argument('--shuffle', dest='shuffle', action='store_true',
+                    help='shuffle training data at every epoch')
+parser.add_argument('--logPWppl', dest='logPWppl', action='store_true',
+                    help='for per word perplexity logging')
+parser.set_defaults(always_save=False)
+parser.set_defaults(shuffle=False)
+parser.set_defaults(logPWppl=False)
 args = parser.parse_args()
 args.tied = True
 
@@ -163,12 +172,17 @@ def evaluate(data_source, batch_size=10):
     for i in range(0, data_source.size(0) - 1, args.bptt):
         data, targets = get_batch(data_source, i, args, evaluation=True)
         output, hidden = model(data, hidden)
-        total_loss += len(data) * criterion(model.decoder.weight, model.decoder.bias, output, targets).data
+        total_loss += len(data) * criterion(model.decoder.weight, model.decoder.bias, output, targets, corpus.dictionary.idx2word, args.logPWppl).data
         hidden = repackage_hidden(hidden)
     return total_loss.item() / len(data_source)
 
 
 def train():
+    global train_data
+    # Shuffle data
+    if args.shuffle:
+        corpus.shuffle_training_data(args.data)
+        train_data = batchify(corpus.train, args.batch_size, args)
     # Turn on training mode which enables dropout.
     if args.model == 'QRNN': model.reset()
     total_loss = 0
@@ -194,7 +208,7 @@ def train():
         optimizer.zero_grad()
 
         output, hidden, rnn_hs, dropped_rnn_hs = model(data, hidden, return_h=True)
-        raw_loss = criterion(model.decoder.weight, model.decoder.bias, output, targets)
+        raw_loss = criterion(model.decoder.weight, model.decoder.bias, output, targets, corpus.dictionary.idx2word)
 
         loss = raw_loss
         # Activiation Regularization
@@ -251,10 +265,17 @@ try:
                     epoch, (time.time() - epoch_start_time), val_loss2, math.exp(val_loss2), val_loss2 / math.log(2)))
             print('-' * 89)
 
+            saved = False
+
             if val_loss2 < stored_loss:
                 model_save(args.save)
                 print('Saving Averaged!')
                 stored_loss = val_loss2
+                saved = True
+
+            if not saved and args.always_save:
+                model_save(args.save)
+                print('Saving model anyway')
 
             for prm in model.parameters():
                 prm.data = tmp[prm].clone()
@@ -267,10 +288,13 @@ try:
               epoch, (time.time() - epoch_start_time), val_loss, math.exp(val_loss), val_loss / math.log(2)))
             print('-' * 89)
 
+            saved = False
+
             if val_loss < stored_loss:
                 model_save(args.save)
                 print('Saving model (new best validation)')
                 stored_loss = val_loss
+                saved = True
 
             if args.optimizer == 'sgd' and 't0' not in optimizer.param_groups[0] and (len(best_val_loss)>args.nonmono and val_loss > min(best_val_loss[:-args.nonmono])):
                 print('Switching to ASGD')
@@ -279,10 +303,19 @@ try:
             if epoch in args.when:
                 print('Saving model before learning rate decreased')
                 model_save('{}.e{}'.format(args.save, epoch))
+                saved = True
                 print('Dividing learning rate by 10')
                 optimizer.param_groups[0]['lr'] /= 10.
 
+            if not saved and args.always_save:
+                model_save(args.save)
+                print('Saving model anyway')
+
             best_val_loss.append(val_loss)
+
+            test_loss = evaluate(test_data, test_batch_size)
+            print('test loss {:5.2f} | test ppl {:8.2f} | test bpc {:8.3f}'.format(
+                test_loss, math.exp(test_loss), test_loss / math.log(2)))
 
 except KeyboardInterrupt:
     print('-' * 89)
@@ -291,9 +324,15 @@ except KeyboardInterrupt:
 # Load the best saved model.
 model_load(args.save)
 
-# Run on test data.
+# Run on train, valid and test data.
 test_loss = evaluate(test_data, test_batch_size)
+train_loss = evaluate(train_data, args.batch_size)
+valid_loss = evaluate(val_data, eval_batch_size)
 print('=' * 89)
+print('| End of training | train loss {:5.2f} | train ppl {:8.2f} | train bpc {:8.3f}'.format(
+    train_loss, math.exp(train_loss), train_loss / math.log(2)))
+print('| End of training | valid loss {:5.2f} | valid ppl {:8.2f} | valid bpc {:8.3f}'.format(
+    valid_loss, math.exp(valid_loss), valid_loss / math.log(2)))
 print('| End of training | test loss {:5.2f} | test ppl {:8.2f} | test bpc {:8.3f}'.format(
     test_loss, math.exp(test_loss), test_loss / math.log(2)))
 print('=' * 89)
