@@ -103,7 +103,7 @@ class SplitCrossEntropyLoss(nn.Module):
             split_hiddens.append(hiddens.masked_select(tmp_mask.unsqueeze(1).expand_as(hiddens)).view(-1, hiddens.size(1)))
         return split_targets, split_hiddens
 
-    def forward(self, weight, bias, hiddens, targets, verbose=False):
+    def forward(self, weight, bias, hiddens, targets, idx2word, verbose=False):
         if self.verbose or verbose:
             for idx in sorted(self.stats):
                 print('{}: {}'.format(idx, int(np.mean(self.stats[idx]))), end=', ')
@@ -165,6 +165,13 @@ class SplitCrossEntropyLoss(nn.Module):
             ###
             running_offset += len(split_hiddens[idx])
             total_loss = entropy.float().sum() if total_loss is None else total_loss + entropy.float().sum()
+
+        words = [idx2word[int(i)] for i in targets]
+        per_word_entropy = [float(i) for i in entropy]
+        total_entropy = float(total_loss)
+
+        print(words)
+        print(per_word_entropy, total_entropy)
 
         return (total_loss / len(targets)).type_as(weight)
 
