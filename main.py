@@ -109,6 +109,7 @@ else:
     corpus = data.Corpus(args.data)
     torch.save(corpus, fn)
 
+print("Vocabulary Size: {}".format(len(corpus.dictionary.word2idx)))
 eval_batch_size = 10
 test_batch_size = 1
 train_data = batchify(corpus.train, args.batch_size, args)
