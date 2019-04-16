@@ -9,6 +9,8 @@ import data
 import model
 
 from utils import batchify, get_batch, repackage_hidden
+from plotter import ppl_plot
+
 
 parser = argparse.ArgumentParser(description='PyTorch PennTreeBank RNN/LSTM Language Model')
 parser.add_argument('--data', type=str, default='data/penn/',
@@ -64,15 +66,16 @@ parser.add_argument('--optimizer', type=str,  default='sgd',
                     help='optimizer to use (sgd, adam)')
 parser.add_argument('--when', nargs="+", type=int, default=[-1],
                     help='When (which epochs) to divide the learning rate by 10 - accepts multiple')
+parser.add_argument('--vocab', type=int, default=0,
+                    help='Fix Vocabulary size')
 parser.add_argument('--always-save', dest='always_save', action='store_true',
-                    help='save after every epoch')
+                    help='save after every epoch', default=False)
 parser.add_argument('--shuffle', dest='shuffle', action='store_true',
-                    help='shuffle training data at every epoch')
+                    help='shuffle training data at every epoch', default=False)
 parser.add_argument('--logPWppl', dest='logPWppl', action='store_true',
-                    help='for per word perplexity logging')
-parser.set_defaults(always_save=False)
-parser.set_defaults(shuffle=False)
-parser.set_defaults(logPWppl=False)
+                    help='for per word perplexity logging', default=False)
+parser.add_argument('--plot', dest='plot', action='store_true',
+                    help='enable plotting of ppl', default=False)
 args = parser.parse_args()
 args.tied = True
 
@@ -109,7 +112,6 @@ else:
     corpus = data.Corpus(args.data)
     torch.save(corpus, fn)
 
-print("Vocabulary Size: {}".format(len(corpus.dictionary.word2idx)))
 eval_batch_size = 10
 test_batch_size = 1
 train_data = batchify(corpus.train, args.batch_size, args)
@@ -124,6 +126,10 @@ from splitcross import SplitCrossEntropyLoss
 criterion = None
 
 ntokens = len(corpus.dictionary)
+print("Calculated Vocabulary Size: {}".format(ntokens))
+if args.vocab:
+    print("Fixing Vocabulary Size to {}".format(args.vocab))
+    ntokens = args.vocab
 model = model.RNNModel(args.model, ntokens, args.emsize, args.nhid, args.nlayers, args.dropout, args.dropouth, args.dropouti, args.dropoute, args.wdrop, args.tied)
 ###
 if args.resume:
@@ -155,9 +161,15 @@ if args.cuda:
     criterion = criterion.cuda()
 ###
 params = list(model.parameters()) + list(criterion.parameters())
+
 total_params = sum(x.size()[0] * x.size()[1] if len(x.size()) > 1 else x.size()[0] for x in params if x.size())
 print('Args:', args)
+print()
 print('Model total parameters:', total_params)
+
+train_ppl = []
+valid_ppl = []
+test_ppl = []
 
 ###############################################################################
 # Training code
@@ -169,6 +181,8 @@ def evaluate(data_source, batch_size=10):
     if args.model == 'QRNN': model.reset()
     total_loss = 0
     ntokens = len(corpus.dictionary)
+    if args.vocab:
+        ntokens = args.vocab
     hidden = model.init_hidden(batch_size)
     for i in range(0, data_source.size(0) - 1, args.bptt):
         data, targets = get_batch(data_source, i, args, evaluation=True)
@@ -189,6 +203,8 @@ def train():
     total_loss = 0
     start_time = time.time()
     ntokens = len(corpus.dictionary)
+    if args.vocab:
+        ntokens = args.vocab
     hidden = model.init_hidden(args.batch_size)
     batch, i = 0, 0
     while i < train_data.size(0) - 1 - 1:
@@ -281,6 +297,8 @@ try:
             for prm in model.parameters():
                 prm.data = tmp[prm].clone()
 
+            valid_ppl.append(math.exp(val_loss2))
+
         else:
             val_loss = evaluate(val_data, eval_batch_size)
             print('-' * 89)
@@ -313,10 +331,17 @@ try:
                 print('Saving model anyway')
 
             best_val_loss.append(val_loss)
+            valid_ppl.append(math.exp(val_loss))
 
-            test_loss = evaluate(test_data, test_batch_size)
-            print('test loss {:5.2f} | test ppl {:8.2f} | test bpc {:8.3f}'.format(
-                test_loss, math.exp(test_loss), test_loss / math.log(2)))
+
+        train_loss = evaluate(train_data, args.batch_size)
+        test_loss = evaluate(test_data, test_batch_size)
+
+        train_ppl.append(math.exp(train_loss))
+        test_ppl.append(math.exp(test_loss))
+
+        print('train ppl {:8.2f} | valid ppl {:8.2f} | test ppl {:8.2f}'.format(
+            train_ppl[-1], valid_ppl[-1], test_ppl[-1]))
 
 except KeyboardInterrupt:
     print('-' * 89)
@@ -324,6 +349,13 @@ except KeyboardInterrupt:
 
 # Load the best saved model.
 model_load(args.save)
+
+# Plot the perplexities
+if args.plot:
+    print("Saving plot")
+    min_len = min(len(train_ppl), len(valid_ppl), len(test_ppl))
+    ppl_plot(train_ppl[:min_len], valid_ppl[:min_len], test_ppl[:min_len], 
+        args.save.replace(".pt", ""))
 
 # Run on train, valid and test data.
 test_loss = evaluate(test_data, test_batch_size)
