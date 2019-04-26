@@ -68,6 +68,10 @@ parser.add_argument('--when', nargs="+", type=int, default=[-1],
                     help='When (which epochs) to divide the learning rate by 10 - accepts multiple')
 parser.add_argument('--vocab', type=int, default=0,
                     help='Fix Vocabulary size')
+parser.add_argument('--unfreezeLSTM', type=int, default=0,
+                    help='Unfreeze LSTM layers >= x, disables weight updates on the rest.')
+parser.add_argument('--freeze-embed', dest='freeze_embed', action='store_true',
+                    help='Freeze the weihgts of the encoder and decoder', default=False)
 parser.add_argument('--always-save', dest='always_save', action='store_true',
                     help='save after every epoch', default=False)
 parser.add_argument('--shuffle', dest='shuffle', action='store_true',
@@ -76,8 +80,9 @@ parser.add_argument('--logPWppl', dest='logPWppl', action='store_true',
                     help='for per word perplexity logging', default=False)
 parser.add_argument('--plot', dest='plot', action='store_true',
                     help='enable plotting of ppl', default=False)
+parser.add_argument('--tied', dest='tied', action='store_false',
+                    help='tie encoder decoder weights', default=True)
 args = parser.parse_args()
-args.tied = True
 
 # Set the random seed manually for reproducibility.
 np.random.seed(args.seed)
@@ -205,6 +210,30 @@ def train():
     ntokens = len(corpus.dictionary)
     if args.vocab:
         ntokens = args.vocab
+    
+    # Sequential Unfreezing
+    # Get the Module list with the RNNs
+    if args.unfreezeLSTM > 0:
+        rnn_layers = next(x for i,x in enumerate(model.children()) if i==5)
+        count = 0
+        for layer in rnn_layers:
+            count += 1
+            # print("Layer {}- {}".format(count, layer.module))
+            for name, param in layer.module.named_parameters():
+                # print("Param {} - {}".format(name, param.size()))
+                if count < args.unfreezeLSTM:
+                    param.requires_grad = False
+
+    if args.freeze_embed:
+        encoder = next(x for i,x in enumerate(model.children()) if i==4)
+        for name, param in encoder.named_parameters():
+            # print("Param {} - {}".format(name, param.size()))
+            param.requires_grad = False
+        decoder = next(x for i,x in enumerate(model.children()) if i==6)
+        for name, param in decoder.named_parameters():
+            # print("Param {} - {}".format(name, param.size()))
+            param.requires_grad = False
+    
     hidden = model.init_hidden(args.batch_size)
     batch, i = 0, 0
     while i < train_data.size(0) - 1 - 1:
@@ -272,6 +301,8 @@ try:
         if 't0' in optimizer.param_groups[0]:
             tmp = {}
             for prm in model.parameters():
+                if prm.requires_grad == False:
+                    continue
                 tmp[prm] = prm.data.clone()
                 prm.data = optimizer.state[prm]['ax'].clone()
 
@@ -295,6 +326,8 @@ try:
                 print('Saving model anyway')
 
             for prm in model.parameters():
+                if prm.requires_grad == False:
+                    continue
                 prm.data = tmp[prm].clone()
 
             valid_ppl.append(math.exp(val_loss2))
