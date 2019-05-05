@@ -309,6 +309,8 @@ try:
         optimizer = torch.optim.SGD(params, lr=args.lr, weight_decay=args.wdecay)
     if args.optimizer == 'adam':
         optimizer = torch.optim.Adam(params, lr=args.lr, weight_decay=args.wdecay)
+    if args.optimizer == 'asgd':
+        optimizer = torch.optim.ASGD(model.parameters(), lr=args.lr, t0=0, lambd=0., weight_decay=args.wdecay)
     for epoch in range(1, args.epochs+1):
         epoch_start_time = time.time()
         train()
