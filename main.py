@@ -10,7 +10,10 @@ import model
 
 from utils import batchify, get_batch, repackage_hidden
 from plotter import ppl_plot
+from tensorboardX import SummaryWriter
 
+import os
+import hashlib
 
 parser = argparse.ArgumentParser(description='PyTorch PennTreeBank RNN/LSTM Language Model')
 parser.add_argument('--data', type=str, default='data/penn/',
@@ -84,6 +87,13 @@ parser.add_argument('--tied', dest='tied', action='store_false',
                     help='tie encoder decoder weights', default=True)
 args = parser.parse_args()
 
+# Set up writer
+writer_path = 'runs/{}'.format(args.save.replace(".pt", ""))
+if os.path.exists(writer_path):
+    writer_path = writer_path + '_new'
+    print("Changing writer path to {}".format(writer_path))
+writer = SummaryWriter(writer_path)
+
 # Set the random seed manually for reproducibility.
 np.random.seed(args.seed)
 torch.manual_seed(args.seed)
@@ -106,8 +116,6 @@ def model_load(fn):
     with open(fn, 'rb') as f:
         model, criterion, optimizer = torch.load(f)
 
-import os
-import hashlib
 fn = 'corpus.{}.data'.format(hashlib.md5(args.data.encode()).hexdigest())
 if os.path.exists(fn):
     print('Loading cached dataset...')
@@ -118,7 +126,7 @@ else:
     torch.save(corpus, fn)
 
 eval_batch_size = 10
-test_batch_size = 1
+test_batch_size = 10
 train_data = batchify(corpus.train, args.batch_size, args)
 val_data = batchify(corpus.valid, eval_batch_size, args)
 test_data = batchify(corpus.test, test_batch_size, args)
@@ -175,6 +183,8 @@ print('Model total parameters:', total_params)
 train_ppl = []
 valid_ppl = []
 test_ppl = []
+
+train_iterant = 0
 
 ###############################################################################
 # Training code
@@ -276,6 +286,9 @@ def train():
                     'loss {:5.2f} | ppl {:8.2f} | bpc {:8.3f}'.format(
                 epoch, batch, len(train_data) // args.bptt, optimizer.param_groups[0]['lr'],
                 elapsed * 1000 / args.log_interval, cur_loss, math.exp(cur_loss), cur_loss / math.log(2)))
+            train_iterant += 1
+            writer.add_scalars('train/', {'epoch': epoch}, train_iterant)
+            writer.add_scalars('train/', {'train_ppl': math.exp(cur_loss)}, train_iterant)
             total_loss = 0
             start_time = time.time()
         ###
@@ -289,6 +302,7 @@ stored_loss = 100000000
 
 # At any point you can hit Ctrl + C to break out of training early.
 try:
+    total_time = 0
     optimizer = None
     # Ensure the optimizer is optimizing params, which includes both the model's weights as well as the criterion's weight (i.e. Adaptive Softmax)
     if args.optimizer == 'sgd':
@@ -307,6 +321,13 @@ try:
                 prm.data = optimizer.state[prm]['ax'].clone()
 
             val_loss2 = evaluate(val_data)
+            valid_ppl.append(math.exp(val_loss2))
+
+            train_loss = evaluate(train_data, args.batch_size)
+            test_loss = evaluate(test_data, test_batch_size)
+            train_ppl.append(math.exp(train_loss))
+            test_ppl.append(math.exp(test_loss))
+
             print('-' * 89)
             print('| end of epoch {:3d} | time: {:5.2f}s | valid loss {:5.2f} | '
                 'valid ppl {:8.2f} | valid bpc {:8.3f}'.format(
@@ -330,10 +351,15 @@ try:
                     continue
                 prm.data = tmp[prm].clone()
 
-            valid_ppl.append(math.exp(val_loss2))
-
         else:
             val_loss = evaluate(val_data, eval_batch_size)
+            valid_ppl.append(math.exp(val_loss))
+
+            train_loss = evaluate(train_data, args.batch_size)
+            test_loss = evaluate(test_data, test_batch_size)
+            train_ppl.append(math.exp(train_loss))
+            test_ppl.append(math.exp(test_loss))
+
             print('-' * 89)
             print('| end of epoch {:3d} | time: {:5.2f}s | valid loss {:5.2f} | '
                 'valid ppl {:8.2f} | valid bpc {:8.3f}'.format(
@@ -350,6 +376,7 @@ try:
 
             if args.optimizer == 'sgd' and 't0' not in optimizer.param_groups[0] and (len(best_val_loss)>args.nonmono and val_loss > min(best_val_loss[:-args.nonmono])):
                 print('Switching to ASGD')
+                writer.add_scalar('ASGD_switch', epoch, epoch)
                 optimizer = torch.optim.ASGD(model.parameters(), lr=args.lr, t0=0, lambd=0., weight_decay=args.wdecay)
 
             if epoch in args.when:
@@ -364,17 +391,20 @@ try:
                 print('Saving model anyway')
 
             best_val_loss.append(val_loss)
-            valid_ppl.append(math.exp(val_loss))
-
-
-        train_loss = evaluate(train_data, args.batch_size)
-        test_loss = evaluate(test_data, test_batch_size)
-
-        train_ppl.append(math.exp(train_loss))
-        test_ppl.append(math.exp(test_loss))
 
         print('train ppl {:8.2f} | valid ppl {:8.2f} | test ppl {:8.2f}'.format(
             train_ppl[-1], valid_ppl[-1], test_ppl[-1]))
+
+        writer.add_scalars('loss/', {'valid_ppl': valid_ppl[-1]}, epoch)
+        writer.add_scalars('loss/', {'train_ppl': train_ppl[-1]}, epoch)
+        writer.add_scalars('loss/', {'test_ppl': test_ppl[-1]}, epoch)
+
+        time_this_epoch = time.time() - epoch_start_time
+        total_time += time_this_epoch
+        avg_epoch_time = total_time / epoch
+        time_left = (args.epochs - epoch) * avg_epoch_time / 60
+        print("Time this epoch: {:5.2f}s | Avg epoch time: {:5.2f}s | Time left: {:5.2f}m".format(time_this_epoch, avg_epoch_time, time_left))
+        writer.add_scalar('time_left', time_left, epoch)
 
 except KeyboardInterrupt:
     print('-' * 89)
