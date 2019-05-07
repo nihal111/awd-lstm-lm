@@ -286,6 +286,7 @@ def train():
                     'loss {:5.2f} | ppl {:8.2f} | bpc {:8.3f}'.format(
                 epoch, batch, len(train_data) // args.bptt, optimizer.param_groups[0]['lr'],
                 elapsed * 1000 / args.log_interval, cur_loss, math.exp(cur_loss), cur_loss / math.log(2)))
+            global train_iterant
             train_iterant += 1
             writer.add_scalars('train/', {'epoch': epoch}, train_iterant)
             writer.add_scalars('train/', {'train_ppl': math.exp(cur_loss)}, train_iterant)
