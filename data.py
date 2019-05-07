@@ -26,30 +26,38 @@ class Dictionary(object):
 
 
 class Corpus(object):
-    def __init__(self, path):
+    def __init__(self, path, vocab_path):
         self.dictionary = Dictionary()
+        self.populate_vocab(vocab_path)
         self.train = self.tokenize(os.path.join(path, 'train.txt'))
         self.valid = self.tokenize(os.path.join(path, 'valid.txt'))
         self.test = self.tokenize(os.path.join(path, 'test.txt'))
 
-    def shuffle_training_data(self, path):
-        self.train = self.tokenize(os.path.join(path, 'train.txt'),
-                                   shuffle=True)
+    def populate_vocab(self, vocab_path):
+        with open(vocab_path, 'r') as f:
+            content = [line.strip() for line in f.readlines()]
 
-    def tokenize(self, path, shuffle=False):
+        # Add words to the dictionary
+        for word in content:
+            self.dictionary.add_word(word)
+
+    def shuffle_training_data(self, path):
+        tokens = list(self.train.shape)[0]
+        self.train = self.tokenize(os.path.join(path, 'train.txt'),
+                                   shuffle=True, tokens=tokens)
+
+    def tokenize(self, path, shuffle=False, tokens=0):
         """Tokenizes a text file."""
         assert os.path.exists(path)
 
         with open(path, 'r') as f:
             content = f.readlines()
 
-        # Add words to the dictionary
-        tokens = 0
-        for line in content:
-            words = line.split() + ['<eos>']
-            tokens += len(words)
-            for word in words:
-                self.dictionary.add_word(word)
+        # Calculate tokens in each file if not done before
+        if tokens == 0:
+            for line in content:
+                words = line.split() + ['<eos>']
+                tokens += len(words)
 
         # Tokenize file content
         ids = torch.LongTensor(tokens)

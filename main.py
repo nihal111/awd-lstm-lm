@@ -69,8 +69,8 @@ parser.add_argument('--optimizer', type=str,  default='sgd',
                     help='optimizer to use (sgd, adam)')
 parser.add_argument('--when', nargs="+", type=int, default=[-1],
                     help='When (which epochs) to divide the learning rate by 10 - accepts multiple')
-parser.add_argument('--vocab', type=int, default=0,
-                    help='Fix Vocabulary size')
+parser.add_argument('--vocab', type=str, default='words.txt',
+                    help='Fix Vocabulary by path')
 parser.add_argument('--unfreezeLSTM', type=int, default=0,
                     help='Unfreeze LSTM layers >= x, disables weight updates on the rest.')
 parser.add_argument('--freeze-embed', dest='freeze_embed', action='store_true',
@@ -122,7 +122,7 @@ if os.path.exists(fn):
     corpus = torch.load(fn)
 else:
     print('Producing dataset...')
-    corpus = data.Corpus(args.data)
+    corpus = data.Corpus(args.data, args.vocab)
     torch.save(corpus, fn)
 
 eval_batch_size = 10
@@ -140,9 +140,6 @@ criterion = None
 
 ntokens = len(corpus.dictionary)
 print("Calculated Vocabulary Size: {}".format(ntokens))
-if args.vocab:
-    print("Fixing Vocabulary Size to {}".format(args.vocab))
-    ntokens = args.vocab
 model = model.RNNModel(args.model, ntokens, args.emsize, args.nhid, args.nlayers, args.dropout, args.dropouth, args.dropouti, args.dropoute, args.wdrop, args.tied)
 ###
 if args.resume:
@@ -202,7 +199,7 @@ def evaluate(data_source, batch_size=10):
     for i in range(0, data_source.size(0) - 1, args.bptt):
         data, targets = get_batch(data_source, i, args, evaluation=True)
         output, hidden = model(data, hidden)
-        total_loss += len(data) * criterion(model.decoder.weight, model.decoder.bias, output, targets, corpus.dictionary.idx2word, args.logPWppl).data
+        total_loss += len(data) * criterion(model.decoder.weight, model.decoder.bias, output, targets, corpus.dictionary.idx2word, args.logPWppl, batch_size=batch_size).data
         hidden = repackage_hidden(hidden)
     return total_loss.item() / len(data_source)
 
@@ -323,7 +320,7 @@ try:
                 tmp[prm] = prm.data.clone()
                 prm.data = optimizer.state[prm]['ax'].clone()
 
-            val_loss2 = evaluate(val_data)
+            val_loss2 = evaluate(val_data, eval_batch_size)
             valid_ppl.append(math.exp(val_loss2))
 
             train_loss = evaluate(train_data, args.batch_size)
@@ -395,6 +392,7 @@ try:
 
             best_val_loss.append(val_loss)
 
+
         print('train ppl {:8.2f} | valid ppl {:8.2f} | test ppl {:8.2f}'.format(
             train_ppl[-1], valid_ppl[-1], test_ppl[-1]))
 
@@ -424,9 +422,14 @@ if args.plot:
         args.save.replace(".pt", ""))
 
 # Run on train, valid and test data.
-test_loss = evaluate(test_data, test_batch_size)
+
+print("Train")
 train_loss = evaluate(train_data, args.batch_size)
+print("Valid")
 valid_loss = evaluate(val_data, eval_batch_size)
+print("Test")
+test_loss = evaluate(test_data, test_batch_size)
+
 print('=' * 89)
 print('| End of training | train loss {:5.2f} | train ppl {:8.2f} | train bpc {:8.3f}'.format(
     train_loss, math.exp(train_loss), train_loss / math.log(2)))
