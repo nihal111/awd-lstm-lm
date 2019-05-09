@@ -103,7 +103,7 @@ class SplitCrossEntropyLoss(nn.Module):
             split_hiddens.append(hiddens.masked_select(tmp_mask.unsqueeze(1).expand_as(hiddens)).view(-1, hiddens.size(1)))
         return split_targets, split_hiddens
 
-    def forward(self, weight, bias, hiddens, targets, idx2word, log_PWppl=False, verbose=False):
+    def forward(self, weight, bias, hiddens, targets, idx2word, log_PWppl=False, batch_size=10, verbose=False):
         if self.verbose or verbose:
             for idx in sorted(self.stats):
                 print('{}: {}'.format(idx, int(np.mean(self.stats[idx]))), end=', ')
@@ -167,13 +167,15 @@ class SplitCrossEntropyLoss(nn.Module):
             total_loss = entropy.float().sum() if total_loss is None else total_loss + entropy.float().sum()
 
         if log_PWppl:
-            words = [idx2word[int(i)] for i in targets]
-            per_word_entropy = [float(i) for i in entropy]
-            total_entropy = float(total_loss)
-
-            print(words)
-            print(per_word_entropy, total_entropy)
-
+            target_batch = targets.reshape(-1, batch_size).transpose(0, 1)
+            entropy_batch = entropy.reshape(-1, batch_size).transpose(0, 1)
+            for x in range(len(target_batch)):
+                words = [idx2word[int(i)] for i in target_batch[x]]
+                per_word_entropy = [float(i) for i in entropy_batch[x]]
+                print(words)
+                print(per_word_entropy)
+                sum_entropy = sum(per_word_entropy)
+                print("Sum, Sum/BPTT, ppl- {}, {}, {}".format(sum_entropy, sum_entropy/70.0, np.exp(sum_entropy/70.0)))
         return (total_loss / len(targets)).type_as(weight)
 
 
